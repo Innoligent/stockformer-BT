@@ -97,9 +97,9 @@ df_data = df_data.replace([-np.inf], config.INF*(-1))
 data = scaler.fit_transform(df_data.values)
 df[config.TECHNICAL_INDICATORS_LIST] = data
 
-train = data_split(df, '2025-07-07 13:30', '2025-07-26 00:00')
+train = data_split(df, '2025-07-07 13:30','2025-07-26 00:00')
 eval = data_split(df, '2025-07-24 00:00', '2025-08-01 00:00')
-test = data_split(df,'2025-07-31 00:00', '2025-08-04 23:00')
+test = data_split(df, '2025-07-31 00:00', '2025-08-04 23:00')
 
 stock_dimension = len(train.tic.unique())
 state_space = stock_dimension
@@ -110,8 +110,8 @@ tensorboard_log_dir = os.path.join(config.TENSORBOARD_LOG_DIR, 'mysac')
 
 env_kwargs = {
     "hmax": 100, 
-    "initial_amount": 1000000000,  
-    "transaction_cost_pct": 0,
+    "initial_amount": 2000000,  
+    "transaction_cost_pct": 0.0002,
     "state_space": state_space, 
     "stock_dim": stock_dimension, 
     "tech_indicator_list": config.TECHNICAL_INDICATORS_LIST, 
@@ -134,8 +134,8 @@ env_kwargs = {
 
 env_kwargs_test = {
     "hmax": 100, 
-    "initial_amount": 1000000000,  
-    "transaction_cost_pct": 0,
+    "initial_amount": 2000000,  
+    "transaction_cost_pct": 0.0002,
     "state_space": state_space, 
     "stock_dim": stock_dimension, 
     "tech_indicator_list": config.TECHNICAL_INDICATORS_LIST, 
@@ -189,9 +189,9 @@ MAESAC_PARAMS = {
     "learning_rate": 0.0001,
     "learning_starts": 100,
     "ent_coef": "auto_0.1",
-    "enc_in": 11,
-    "dec_in": 11,
-    "c_out_construction": 11,
+    "enc_in": 102,
+    "dec_in": 102,
+    "c_out_construction": 102,
     "d_model":128,
     "d_ff":256,
     "n_heads":4,
@@ -217,17 +217,11 @@ trained_sac = agent.train_model(model=model_sac,
 end = time.time()
 print("Training time: %.3f"%(end-start))
 
-#-------save model-----------
-#model_save_path = os.path.join('trained_models', version, model_name)
-#os.makedirs(model_save_path, exist_ok=True)
-#trained_sac.save(os.path.join(model_save_path, 'model30000.zip'))
-#----------------------------
+
 
 model_path = os.path.join('trained_models/', version, model_name, 'best_model.zip')
-print(model_path)
 start = time.time()
 results = DRLAgent.DRL_prediction_load_from_file(model_name='maesac',environment=test_trade_gym, cwd=model_path)
-#results = DRLAgent.DRL_prediction(model_name='maesac',environment=test_trade_gym)
 end = time.time()
 print("Test time: %.3f"%(end-start))
 

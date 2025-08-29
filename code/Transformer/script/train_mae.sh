@@ -9,9 +9,9 @@ python main.py \
       --data_type stock \
       --root_path ../../data/ \
       --full_stock_path CSI/ \
-      --enc_in 96 \
-      --dec_in 96 \
-      --c_out 96 \
+      --enc_in 102 \
+      --dec_in 102 \
+      --c_out 102 \
       --short_term_len 1 \
       --long_term_len 5 \
       --d_model 128 \

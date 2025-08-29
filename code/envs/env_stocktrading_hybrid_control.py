@@ -140,11 +140,11 @@ class StockTradingEnv(gym.Env):
             if self.info[index + 1] > 0:
                 # Sell only if the price is > 0 (no missing data in this particular date)
                 # perform sell action based on the sign of the action
-                if self.info[index + self.stock_dim + 1] > 0:
+                if True: #self.info[index + self.stock_dim + 1] > 0:
                     # Sell only if current asset is > 0
-                    sell_num_shares = min(
-                        abs(action), self.info[index + self.stock_dim + 1]
-                    )
+                    #sell_num_shares = min(abs(action), self.info[index + self.stock_dim + 1])
+                    
+                    sell_num_shares = abs(action)
                     sell_amount = (
                         self.info[index + 1]
                         * sell_num_shares
@@ -158,6 +158,10 @@ class StockTradingEnv(gym.Env):
                         self.info[index + 1] * sell_num_shares * self.transaction_cost_pct
                     )
                     self.trades += 1
+
+                    #pay the transaction cost
+                    self.info[0]-=self.info[index + 1] * sell_num_shares * self.transaction_cost_pct
+
                 else:
                     sell_num_shares = 0
             else:
@@ -173,11 +177,12 @@ class StockTradingEnv(gym.Env):
         def _do_buy():
             if self.info[index + 1] > 0:
                 # Buy only if the price is > 0 (no missing data in this particular date)
-                available_amount = self.info[0] // self.info[index + 1]
+                #available_amount = self.info[0] // self.info[index + 1]
                 # print('available_amount:{}'.format(available_amount))
 
                 # update balance
-                buy_num_shares = min(available_amount, action)
+                # buy_num_shares = min(available_amount, action)
+                buy_num_shares = action
                 buy_amount = (
                     self.info[index + 1] * buy_num_shares * (1 + self.transaction_cost_pct)
                 )
@@ -186,6 +191,10 @@ class StockTradingEnv(gym.Env):
                 self.info[index + self.stock_dim + 1] += buy_num_shares
 
                 self.cost += self.info[index + 1] * buy_num_shares * self.transaction_cost_pct
+
+                #pay the transaction cost
+                self.info[0]-=self.info[index + 1] * buy_num_shares * self.transaction_cost_pct
+
                 self.trades += 1
             else:
                 buy_num_shares = 0
@@ -194,13 +203,112 @@ class StockTradingEnv(gym.Env):
 
         buy_num_shares = _do_buy()
 
-        return buy_num_shares
-
-
+        return buy_num_shares 
+    
+    
     def _make_plot(self):
         plt.plot(self.asset_memory, "r")
         plt.savefig(self.figure_path+self.mode+"_account_value_trade_{}.png".format(self.episode))
         plt.close()
+
+    #---------convert action to target position and target trade volumn--------
+    #----等权交易-------
+    def action_to_position_eqWeighted(self, actions):
+        """
+        Convert action (-1 to 1) into target position ratios per stock.
+        - top half (largest actions): buy 50% total capital, equal weight
+        - bottom half (smallest actions): sell 50% total capital, equal weight
+        - middle one if odd count: hold (0%)
+        """
+        stock_dim = len(actions)
+        sorted_idx = np.argsort(actions)  # 从小到大排序 index
+
+        half = stock_dim // 2
+        position_ratio = np.zeros(stock_dim)
+
+        # 50% 卖出
+        sell_idx = sorted_idx[:half]
+        for i in sell_idx:
+            position_ratio[i] = -1.0 / stock_dim  # 卖出等权
+
+        # 50% 买入
+        buy_idx = sorted_idx[-half:]
+        for i in buy_idx:
+            position_ratio[i] = 1.0 / stock_dim   # 买入等权
+
+        # 如果是奇数，中间那个就为 0（即 position_ratio 保持 0）
+        return position_ratio
+
+    #---分位数方法-------
+    def action_to_position_rankBased(self, actions):
+        n = len(actions)
+        # 排名（从强到弱）
+        order = np.argsort(-np.array(actions))  # 越大越强
+
+        # 初始化仓位
+        pos = np.zeros(n)
+
+        # 分位数边界
+        q10 = int(n * 0.1)
+        q20 = int(n * 0.2)
+        q40 = int(n * 0.4)
+        q60 = int(n * 0.6)
+        q80 = int(n * 0.8)
+        q90 = int(n * 0.9)
+       
+        # 强势区间
+        pos[order[:q10]] = 0.25 / q10                # 前10%
+        pos[order[q10:q10+q20]] = 0.20 / q20         # 接下来的20%
+        pos[order[q10+q20:q40]] = 0.05 / (q40-q10-q20)  # 再接下来的10%
+
+        # 中间 20% = 0 → 不赋值即可
+
+        # 弱势区间（对称）
+        pos[order[-q10:]] = -0.25 / q10              # 最后10%
+        pos[order[-(q10+q20):-q10]] = -0.10 / q20    # 倒数20%
+        pos[order[-q40:-(q10+q20)]] = -0.05 / (q40-q10-q20)  # 倒数10%
+
+        return pos
+
+
+    def convert_position_ratio_to_trade_volume(self, action, current_shares, prices, total_asset):
+        """        
+            根据目标持仓比例和当前价格，计算每个币种应交易的数量。
+            如果调整金额不足 min_trade_value，则忽略交易。
+    
+        输入:
+            action: ndarray, shape=(stock_dim,), 每个股票的目标持仓比例 ∈ [0,1]，且 sum(action) <= 1
+            current_shares: ndarray, 当前每个股票的持仓数量
+            prices: ndarray, 当前每个股票的价格
+            begin_total_asset: float, 起始总资产，用作仓位计算基准
+
+        输出:
+            delta_shares: ndarray, 每个股票应该买入（正）或卖出（负）多少币
+        """
+        min_trade_value = 200
+
+        # 每个股票目标资金占用（元）
+        target_value_per_stock = action * total_asset
+
+        # 转换为目标币数
+        #target_shares = np.round(target_value_per_stock / prices, 6)
+
+        # 当前每个股票占用资金（元）
+        current_value_per_stock = current_shares * prices
+
+        # 金额差值
+        delta_value = target_value_per_stock - current_value_per_stock
+
+        # 过滤小额变动
+        delta_value[np.abs(delta_value) < min_trade_value] = 0
+
+        # 差值 -> 需要交易的币数
+        delta_shares = np.round(delta_value / prices, 6)
+
+        return delta_shares
+
+    
+    #-------------------------------------
 
     def step(self, actions):
         if self.mode == 'train':
@@ -233,6 +341,8 @@ class StockTradingEnv(gym.Env):
                 )
 
             self.reward = self.reward + self.reward_scaling * ((self.end_total_asset - self.initial_amount)/(self.initial_amount * 1.0))
+            #add number of trades as a loss term
+            #self.reward = self.reward + self.reward_scaling * ((self.end_total_asset - self.initial_amount)/(self.initial_amount * 1.0)) - self.trades/1000000
 
             f1 = open(self.log_name, 'a')
             f1.write(str(self.end_total_asset)+'\t'+str(self.reward)+ '\t' + str(np.sum(self.rewards_memory)) + '\t' + str(sharpe) + '\t' + str((self.end_total_asset-self.initial_amount)/self.initial_amount) + '\n')
@@ -297,15 +407,28 @@ class StockTradingEnv(gym.Env):
         else:
 
             # pdb.set_trace()
-            actions = actions * self.hmax  # actions initially is scaled between 0?-1 to 1
+            """ actions = actions * self.hmax  # actions initially is scaled between 0?-1 to 1
             actions = actions.astype(
                 int
-            )
+            ) """
+
+            actions = self.action_to_position_rankBased(actions)  # 将原始action映射为持仓比例
+
             begin_total_asset = self.info[0] + sum(
                 np.array(self.info[1 : (self.stock_dim + 1)])
                 * np.array(self.info[(self.stock_dim + 1) : (self.stock_dim * 2 + 1)])
             )
             # print("begin_total_asset:{}".format(begin_total_asset))
+
+            prices = np.array(self.info[1:1 + self.stock_dim])
+            current_shares = np.array(self.info[(self.stock_dim + 1):(2 * self.stock_dim + 1)])
+
+            actions = self.convert_position_ratio_to_trade_volume(
+                action=actions,
+                current_shares=current_shares,
+                prices=prices,
+                total_asset=begin_total_asset  # 注意这是你的已有变量
+            )
 
             argsort_actions = np.argsort(actions)
 
